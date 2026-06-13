@@ -1,25 +1,15 @@
 """
 streamlit_predict_api.py
 ========================
-Add this as a separate file in your Streamlit project repo (same folder as
-streamlit_cgm_simulator.py). Deploy it alongside your Streamlit app using a
-lightweight ASGI server, OR integrate the /predict route directly into
-Streamlit via the approach below.
-
-OPTION A – Separate FastAPI microservice (recommended for production)
----------------------------------------------------------------------
-Deploy this on Render.com free tier or Railway.app free tier.
-Update the $streamlitUrl in predict.php to point here.
+FastAPI microservice that serves the hypoglycemia prediction model.
+Deploy on Render.com / Railway.app.
 
 Run locally:
     pip install fastapi uvicorn scikit-learn pandas numpy
     uvicorn streamlit_predict_api:app --host 0.0.0.0 --port 8000
 
-OPTION B – Streamlit built-in (simpler, same Streamlit Cloud deployment)
--------------------------------------------------------------------------
-Streamlit doesn't natively expose REST endpoints, so for the Streamlit Cloud
-deployment at technovationpredictionmodel.streamlit.app you need Option A,
-OR you can use Streamlit's query-param trick (see bottom of this file).
+Render start command (must match your service):
+    uvicorn streamlit_predict_api:app --host 0.0.0.0 --port $PORT
 """
 
 from fastapi import FastAPI, HTTPException
@@ -27,8 +17,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pickle, os, numpy as np, pandas as pd
 
-# ── Load model (same pickle your Streamlit app loads) ─────────────────────────
-MODEL_PATH = os.getenv("MODEL_PATH", "final_model.pkl")
+# ── Load model ──────────────────────────────────────────────────────────────
+_HERE = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(_HERE, "final_model.pkl"))
+
+MODEL_LOADED = False
+model = scaler = feature_columns = None
+threshold = 0.5
 
 try:
     with open(MODEL_PATH, "rb") as f:
@@ -36,10 +31,11 @@ try:
     model           = model_package["model"]
     scaler          = model_package["scaler"]
     feature_columns = model_package["feature_columns"]
-    threshold       = model_package.get("threshold", 0.5)
+    threshold       = model_package.get("recommended_threshold", model_package.get("threshold", 0.5))
     MODEL_LOADED    = True
+    print(f"[INFO] Model loaded successfully from {MODEL_PATH}")
 except Exception as e:
-    print(f"[WARN] Model not loaded: {e}")
+    print(f"[WARN] Model not loaded from {MODEL_PATH}: {e}")
     MODEL_LOADED = False
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -47,17 +43,26 @@ app = FastAPI(title="HutanoSense Prediction API", version="1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # tighten to your InfinityFree domain in prod
-    allow_methods=["POST", "GET"],
+    allow_origins=["*"],          # tighten to your domain in prod
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
 class FeaturePayload(BaseModel):
     features: dict
 
-@app.get("/health")
+
+# Render (and many uptime pingers) send HEAD requests to check liveness.
+# GET-only routes return 405 on HEAD, which just clutters the logs.
+@app.api_route("/", methods=["GET", "HEAD"])
+def root():
+    return {"status": "ok", "service": "HutanoSense Prediction API", "model_loaded": MODEL_LOADED}
+
+
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok", "model_loaded": MODEL_LOADED}
+
 
 @app.post("/predict")
 def predict(payload: FeaturePayload):
@@ -92,27 +97,3 @@ def predict(payload: FeaturePayload):
         "probability": round(probability, 4),
         "risk_level":  risk_level,
     }
-
-
-# ── OPTION B helper: Streamlit query-param trick ──────────────────────────────
-# If you MUST keep everything inside one Streamlit app, add this block to
-# the TOP of streamlit_cgm_simulator.py (before st.title):
-#
-#   import streamlit as st
-#   from urllib.parse import parse_qs
-#
-#   params = st.query_params
-#   if params.get("api") == ["predict"]:
-#       import json, sys
-#       payload_str = params.get("payload", ["{}"])[0]
-#       features_raw = json.loads(payload_str)
-#       # ... run the model exactly as in /predict above ...
-#       st.write(json.dumps({"prediction": prediction,
-#                            "probability": probability,
-#                            "risk_level": risk_level}))
-#       st.stop()
-#
-# Then in predict.php change the URL to:
-#   $streamlitUrl = 'https://technovationpredictionmodel.streamlit.app/?api=predict&payload=' . urlencode(json_encode(['features' => $features]));
-# NOTE: Streamlit Cloud adds latency and this approach is fragile; Option A is
-# strongly preferred for any production use.
