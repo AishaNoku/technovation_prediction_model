@@ -28,7 +28,7 @@ from pydantic import BaseModel
 import pickle, os, numpy as np, pandas as pd
 
 # ── Load model (same pickle your Streamlit app loads) ─────────────────────────
-MODEL_PATH = os.getenv("MODEL_PATH", "hypoglycemia_model.pkl")
+MODEL_PATH = os.getenv("MODEL_PATH", "final_model.pkl")
 
 try:
     with open(MODEL_PATH, "rb") as f:
