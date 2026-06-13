@@ -102,6 +102,28 @@ def load_model():
 
 model_package = load_model()
 
+# ── API trick: handle ?api=predict&payload=... before rendering any UI ───────
+import json
+from urllib.parse import unquote
+
+_params = st.query_params
+if _params.get("api") == "predict":
+    payload_str = unquote(_params.get("payload", "{}"))
+    try:
+        raw = json.loads(payload_str).get("features", {})
+        row = {col: raw.get(col, 0) for col in feature_columns}
+        df = pd.DataFrame([row])
+        X_scaled = scaler.transform(df)
+        probability = float(model.predict_proba(X_scaled)[0, 1])
+        prediction = 1 if probability >= threshold else 0
+        risk_level = "LOW" if probability < 0.3 else ("MEDIUM" if probability < 0.7 else "HIGH")
+        result = {"prediction": prediction, "probability": round(probability, 4), "risk_level": risk_level}
+    except Exception as e:
+        result = {"error": str(e)}
+
+    st.write(json.dumps(result))
+    st.stop()
+
 if model_package:
     model = model_package['model']
     scaler = model_package['scaler']
